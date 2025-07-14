@@ -11,7 +11,6 @@ GS = fread(here::here('out','datasets','STRING_TP_FP.gz') )
 setnames(GS,c('Protein_1','Protein_2','Class'))
 
 
-
 # load datasets
 KO= fread(here::here('in','datasets','kinase_ko_proteomes.tsv'))
 KO = KO[str_detect(Strain,'^CAL')
@@ -297,7 +296,7 @@ mad_datasets = Reduce(rbind,list(WT_mad[,dataset:='WT_isolates'],
                                  subset_stress_mad[,dataset:='stressed_isolates'],
                                  KO_mad[,dataset:='kinase_KO']
 ))
-mad_datasets[,Common_proteins:= fifelse(Uniprot %in% common_proteins, 'common','unique')]
+mad_datasets[,Common_proteins:= fifelse(Uniprot %in% common_proteins, 'common','not_common')]
 
 stat_box_data <- function(y) {
   return( 
@@ -392,7 +391,9 @@ set.seed(1234)
 train_set = sample(sampled_GS$id,nrow(sampled_GS)*0.7)
 sampled_GS[,set:= fifelse(id %in% train_set,'train','test')]
 fwrite(sampled_GS[,id:=NULL],here::here('out','datasets','sampled_GS.gz'))
-new_GS = rbind(GS_mad[,dataset:='unfiltered'],
+sampled_GS = fread(here::here('out','datasets','sampled_GS.gz'))
+sampled_GS[,.N, by = Class]
+Snew_GS = rbind(GS_mad[,dataset:='unfiltered'],
                sampled_GS[,dataset:='sampled'] )
 new_GS[,.N,by = .(Class,dataset)]
 new_GS[,.N,by = .(Class,dataset,bands)] |> 

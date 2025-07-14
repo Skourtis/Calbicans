@@ -2,10 +2,10 @@
 library(data.table);library(ggplot2); library(gridExtra); library(umap);library(stringr)
 set.seed(123)
 # Uniprot mapping
-Uniprot_annot = fread(here::here('in','datasets','uniprotkb_taxonomy_id_237561_2025_07_07.tsv.gz'))
+Uniprot_annot = fread(here::here('in','datasets','uniprotkb_taxonomy_id_237561_2025_07_08.tsv.gz'))
 Uniprot_annot[,CGD:=str_remove(CGD,';[:print:]*$')]
 #### Prepare co-regulation scores ####
-DT = fread(here::here('out','datasets','whole_streesed_covariations.gz'))
+DT = fread(here::here('out','datasets','whole_stressed_covariations.gz'))
 # Turn co-regulation score back into a "distance" metric and log2-transform for better tSNE performance
 DT[, `:=`  (coreg_distance = (1 - (corr_bicor+1)/2))]
 
@@ -99,8 +99,8 @@ ggplot(uniprot_subcell_plot, aes(UMAP1, UMAP2, colour = final_localisation))+
   # geom_point(size = 1, alpha = 0.9, shape = 16, data = uniprot_subcell_plot[ final_localisation == "Multi-pass membrane protein" ])+
   # geom_point(size = 1, alpha = 0.9, shape = 16, data = uniprot_subcell_plot[ final_localisation == "Mitochondria" ])+
   # scale_colour_manual(values = col_values, name = "Subcellular location")+
-  theme_bw()+ theme(legend.position="bottom")+
+  theme_bw()+ theme(legend.position="none")+
   scico::scale_color_scico_d(palette = 'batlow')+
   facet_wrap('final_localisation')
-ggsave( here::here('out','plots', 'ProHD_RF_uniprot_localisation.pdf'))
+ggsave( here::here('out','plots', 'bicor_umap_uniprot_localisation.pdf'))
 
