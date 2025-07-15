@@ -28,7 +28,7 @@ remove_backlash <- function(x){
   gsub('[(\")(\\)]', '', deparse(x))
 }
 clusterONE[,Members:=remove_backlash(Members),by = Cluster]
-
+fwrite(clusterONE,here::here('out','datasets','all_clusterONE_modules.gz'))
 sets_of_complexes = purrr::map(.x = clusterONE$Members,
            ~as.vector(str_split(.x,' ',simplify = T)))
 names(sets_of_complexes) <- clusterONE$Cluster
@@ -161,6 +161,7 @@ cluster_enrichment[, Cluster:=as.character(Cluster)]
 Cluster_enrichment = merge(cluster_enrichment[order(p.adjust)][,.SD[head(1)], by = Cluster],
       clusterONE[to_remove==F], by ='Cluster',all.y = T)
 fwrite(Cluster_enrichment, here::here('out','datasets','ClusterOne_clusters.gz'))
+Cluster_enrichment = fread(here::here('out','datasets','ClusterOne_clusters.gz'))
 is.na(Cluster_enrichment$ONTOLOGY) |> table()         
 
 clusters_covar = data.table()
@@ -364,6 +365,87 @@ Cluster_enrichment = merge(clusters_covar,Cluster_enrichment, by ='Cluster')
                      # annotation_row =cluster_annotation,
                      annotation_col = cluster_annotation,
   )
+  Cluster_enrichment_members = Cluster_enrichment |> 
+    tidyr::separate_longer_delim(cols = 'Members',delim = ' ') |> 
+    as.data.table()
   
+  cluster_members_bicor =  bicor_covar[Protein_1 %in% Cluster_enrichment_members$Members & 
+                Protein_2 %in% Cluster_enrichment_members$Members]
+  cluster_members_bicor_rev = copy(cluster_members_bicor)
+  cluster_members_bicor_rev[,`:=`(Protein_1 = Protein_2,
+         Protein_2 = Protein_1)]
+  cluster_members_bicor = rbind(cluster_members_bicor,
+                                cluster_members_bicor_rev)
+  cluster_members_bicor = merge(cluster_members_bicor, Cluster_enrichment_members[,.(Cluster,Members)], allow.cartesian=TRUE,
+                                by.x = 'Protein_1', by.y = 'Members') |> 
+    merge(Cluster_enrichment_members[,.(Cluster,Members)], allow.cartesian=TRUE,by.x = 'Protein_2', by.y = 'Members')
+  avg_cluster_covar  = cluster_members_bicor[,.(cluster_pair_covar = mean(corr_bicor,na.rm = T)), 
+                                             by =.(Cluster.x,Cluster.y)
+                                             ]
+  matrix_clusters = copy(avg_cluster_covar)
+  matrix_clusters[,`:=`(Cluster.x = as.character(Cluster.x),
+                        Cluster.y = as.character(Cluster.y))]
+  matrix_clusters = matrix_clusters |> dcast(Cluster.x ~ Cluster.y, value.var = 'cluster_pair_covar') |> 
+    tibble::column_to_rownames('Cluster.x')
+  matrix_clusters = matrix_clusters[colnames(matrix_clusters),colnames(matrix_clusters)]
+  diag(matrix_clusters) <- 1
+  # matrix_clusters[is.na(matrix_clusters)] <- rnorm(sum(is.na(matrix_clusters)),0,0.1)
+  pheatmap::pheatmap(matrix_clusters, cluster_rows = T, cluster_cols = T)
+  
+  to_join = clusters_overlap[,.(name1,name2,overlap)]
+  setnames(to_join,c('Cluster.x','Cluster.y','overlap'))
+  to_join[,`:=`(Cluster.x = as.integer(Cluster.x),
+                Cluster.y = as.integer(Cluster.y))]
+  avg_cluster_covar = merge(avg_cluster_covar,to_join, by = c('Cluster.x','Cluster.y'))
+  
+  avg_cluster_covar = avg_cluster_covar[Cluster.x>Cluster.y]  
+  avg_cluster_covar |> 
+    ggplot(aes(x = cluster_pair_covar , y = overlap))+
+    geom_point(alpha = 0.5)+
+    theme_bw()
+  
+  
+  clusters_to_plot =  avg_cluster_covar[overlap==0][order(-cluster_pair_covar)
+                                                    ][1,.(Cluster.x, Cluster.y)] |> 
+    unlist() |> as.character()
+  
+  bicorcor_OI_int_piv  = df |>
+    as.data.frame() |> 
+    tibble::rownames_to_column('Uniprot') |> 
+    as.data.table() |> 
+    melt(id.vars = 'Uniprot', variable.name = 'experiment',value.name = 'LogRatio')
+  
+  
+  bicorcor_OI_int_piv[,category:=NULL]
+  bicorcor_OI_int_piv[,category:=dplyr::case_when(
+  Uniprot %in% as.vector(str_split(Cluster_enrichment[Cluster == clusters_to_plot[1] ,Members],' ',simplify = T)) ~Cluster_enrichment[Cluster == clusters_to_plot[1],Description],
+    Uniprot %in% as.vector(str_split(Cluster_enrichment[Cluster == clusters_to_plot[2] ,Members],' ',simplify = T)) ~Cluster_enrichment[Cluster == clusters_to_plot[2],Description],
+    TRUE~'other'
+  )]
+  bicorcor_OI_int_piv =bicorcor_OI_int_piv[category!='other'
+  ]
+  colour_pallet = c('darkgreen','darkorange')
+  N_proteins = bicorcor_OI_int_piv[!is.na(LogRatio)][,.(N_quant = .N), by = experiment]
+  experiments_to_plots = N_proteins[N_quant>=quantile(N_proteins$N_quant)[2],experiment] |>
+    head(50)
+  bicorcor_OI_int_piv = bicorcor_OI_int_piv[experiment %in% experiments_to_plots]
+  ggplot(bicorcor_OI_int_piv,aes(x = experiment, y= LogRatio,
+                                 colour= category,group=Uniprot))+
+    # geom_line(data = bicorcor_OI_int_piv[category == 'other'],alpha = 0.05)+
+    # geom_line(alpha = 0.5)+
+    geom_line(data = bicorcor_OI_int_piv[str_detect(category,'regulation of gene expression')],alpha = 0.6)+
+    geom_line(data = bicorcor_OI_int_piv[str_detect(category,'regulation of gene expression',negate = T)],alpha = 0.6)+
+    theme(axis.text.x = element_blank(),axis.ticks.x = element_blank(),
+          legend.position = 'bottom',
+          panel.border = element_blank(), panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))+
+    scale_colour_manual(values = colour_pallet)+
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+          panel.background = element_blank(), axis.line = element_line(colour = "black"))+
+    ggtitle('ClusterONE top covarying clusters',
+            subtitle = 'have no shared members')
+  
+  ggsave(here::here('out','plots','ClusterONE_covarying_modules.pdf'))
+``  
   
   

@@ -1,6 +1,6 @@
 # check bicor against GS
 library(data.table);library(ggplot2);library(WGCNA)
-library(PRROC);library(ggpubr)
+library(PRROC);library(ggpubr);library(stringr)
 # Uniprot mapping
 Uniprot_annot = fread(here::here('in','datasets','uniprotkb_taxonomy_id_237561_2025_07_08.tsv.gz'))
 Uniprot_annot[,CGD:=str_remove(CGD,';[:print:]*$')]
@@ -251,7 +251,7 @@ DT_normalised[,N_pairs_bands := .N, by = bands]
 DT_normalised[, zscore := zscore(condition_specific_cor), by=bands]
 
 fwrite(DT_normalised,here::here('out','datasets','covariation_stressed_treatments_normalised.gz'))
-
+DT_normalised = fread(here::here('out','datasets','covariation_stressed_treatments_normalised.gz'))
 across_cond_cor = DT_normalised |> 
   dcast(Protein_1 + Protein_2 ~ Condition, value.var = 'bicor') 
 across_cond_cor |> dim()
@@ -461,7 +461,19 @@ DT_avg = DT_normalised[!is.na(bicor),.(N_covariations = .N,
       avg_covariation = mean(bicor, na.rm = T),
       sd_covariation = sd(bicor, na.rm = T)), by = .(Protein_1,Protein_2)]
 
-DT_avg[avg_covariation>0.4][order(-avg_covariation)]|> 
+DT_avg[avg_covariation>0.3][order(-avg_covariation)]|> 
   ggplot(aes(x= avg_covariation, y = sd_covariation))+
   geom_hex()+
-  scico::scale_fill_scico()
+  scico::scale_fill_scico()+
+  ggtitle('High covarying pairs, covary similarly across conditions')
+ggsave(here::here('out','plots','hexplot_covaration_avg_conditions.pdf'))
+
+DT_normalised[,.SD[sample(.N,1000000)], by = .(Condition)] |> ggplot(aes(x = avg_cor, y = bicor))+
+  geom_hex()+
+  theme_bw()+
+  facet_wrap('Condition')+
+  annotate("rect", xmin = 0.57, xmax = 1, ymin = -1, ymax = 1,
+           alpha = .2, colour = 'darkred')+
+  annotate("rect", xmin = -1, xmax = 1, ymin = 0.57, ymax = 1,
+           alpha = .2, colour = 'darkred')
+ggsave(here::here('out','plots','hexplot_conditions_similarity_sample.pdf'))

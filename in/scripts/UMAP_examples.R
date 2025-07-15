@@ -1,20 +1,20 @@
 # Load necessary libraries
 # install.packages('')
 library(data.table);library(ggplot2); library(gridExtra); library(umap); library(stringr)
-Uniprot_mapping =fread(here::here('in','datasets','uniprotkb_taxonomy_id_237561_2025_07_07.tsv.gz'))
+Uniprot_mapping =fread(here::here('in','datasets','uniprotkb_taxonomy_id_237561_2025_07_08.tsv.gz'))
 Uniprot_mapping[,ID:=str_remove(`Gene Names`,' [:print:]*$')]
 Uniprot_mapping[,CGD:=str_remove(CGD,';[:print:]*$')]
 set.seed(1234)
 # Load the coregulation scores (treeClust + TOM)
-DT = fread(here::here('out','datasets','whole_streesed_covariations.gz'))
-DT = DT[corr_bicor>=0.507,.(Protein_1,Protein_2,corr_bicor)]
+DT_all = fread(here::here('out','datasets','whole_stressed_covariations.gz'))
+DT = DT_all[corr_bicor>=0.57,.(Protein_1,Protein_2,corr_bicor)]
 #loading UMAP from previous script 
 uMap_layout = fread(here::here('out','datasets','UMAP_covariation.gz'))
 uMap_layout = merge(uMap_layout,
       Uniprot_mapping[,.(Entry,ID)],by = 'Entry')
 # selected proteins to check
-to_check = examples_to_show[`Protein existence`=='Predicted' &
-                              Annotation==1][(order(min_padj))][25:28,Entry]
+# to_check = examples_to_show[`Protein existence`=='Predicted' &
+#                               Annotation==1][(order(min_padj))][25:28,Entry]
 to_check =  c('A0A1D8PCX5','A0A1D8PD99','A0A1D8PTA4','Q5ALU1','Q59Z69')[1:4]
 uMap_layout[,annot:= fcase(
   Entry ==to_check[1] ,to_check[1],
@@ -60,10 +60,24 @@ ggplot(uMap_layout, aes(x = UMAP1, y = UMAP2, colour =annot, label = ID ))+
         axis.title=element_blank(), plot.margin = unit( c(0.5, 0.5, 0.5, 0.5), "mm"))+
   scale_color_manual(values = colour_annot)+
   ggrepel::geom_text_repel(data = uMap_layout[!is.na(annot)][str_detect(annot,'^Int',negate = T)])
-ggsave(  here::here('out','plots','umap_poor_characterised_prots_interactors.pdf'),p1)
+ggsave(  here::here('out','plots','umap_poor_characterised_prots_interactors.pdf'))
 
 # statistical Go enrichments terms for significant functions
 enrichments_bicor = fread(here::here('out','datasets',glue::glue('enrichment_terms_bicor.csv')))
+
+Uniprot_mapping[,category:= fcase(
+  Entry %in% unique(enrichments_bicor$Protein), 'level_4_functional annotation',
+  Entry %in% unique(c(DT$Protein_1,DT$Protein_2)), 'level_3_covariation partners',
+  Entry %in% unique(c(DT_all$Protein_1,DT_all$Protein_2)), 'level_2_covariation scores'
+)]
+Uniprot_mapping[is.na(category), category:= 'level_1_not_detected']
+Uniprot_mapping |> ggplot(aes(x = category, fill = as.factor(Annotation)))+
+  geom_bar()+
+  theme_bw()+
+  theme(legend.position = 'bottom')+
+  coord_flip()
+ggsave(here::here('out','plots','Annotation_and_functional_annotation.pdf'))
+
 
 # for each protein of interest zoom in
 term_OI = enrichments_bicor[Protein == to_check[1]][Count>1][order(p.adjust)]
@@ -242,5 +256,7 @@ bicorcor_OI_int_piv |> ggplot(aes(x = experiment, y= LogRatio,colour= category,g
   # annotate('text',label = , 
   #          x =100,  y = 4, angle = 0)+
   # # ylim(-5,5)+
-  ggtitle(glue::glue('{Protein_OI} interactors {term} fdr/n adj.pval = {fifelse(round(go_Term_pval,3)==0,"<0.001",as.character(round(go_Term_pval,4)))}'))
+  ggtitle(glue::glue('{Protein_OI} interactors {term} fdr/n adj.pval = {fifelse(round(go_Term_pval,3)==0,"<0.001",as.character(round(go_Term_pval,4)))}'),
+          subtitle = Uniprot_annot[Entry == Protein_OI,`Gene Names`])
+ggsave(  here::here('out','plots',glue::glue('{Protein_OI}_lineplot_covariation_term.pdf')))
 

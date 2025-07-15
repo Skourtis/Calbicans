@@ -1,7 +1,8 @@
 # changes to function of single protein
 # BiocManager::install("GEOquery")
-library(diffcoexp); library(ggpmisc)
+library(diffcoexp); library(ggpmisc); library(data.table)
 library(UpSetR); library(org.Calbicans.eg.db)
+library(clusterProfiler); library(future);library(stringr)
 DT_normalised = fread(here::here('out',
                                  'datasets',
                                  'covariation_stressed_treatments_normalised.gz'))
@@ -148,10 +149,10 @@ res$DCGs |> View()
 
 # plotting_protein_specific_correlation
 
-DT_normalised_all = fread(here::here('out',
-                                 'datasets',
-                                 'covariation_stressed_treatments_normalised.gz'))
-DT_plot= DT_normalised_all[Condition %in% c('SC_flc','SM_lys')]
+# DT_normalised = fread(here::here('out',
+#                                  'datasets',
+#                                  'covariation_stressed_treatments_normalised.gz'))
+DT_plot= DT_normalised[Condition %in% c('SC_flc','SM_lys')]
 DT_plot = DT_plot |> dcast(Protein_1+Protein_2~Condition,value.var = 'bicor')
 DT_pair_rev = copy(DT_plot)
 DT_pair_rev[,`:=`(Protein_1 = Protein_2,
@@ -172,12 +173,12 @@ partners = merge(plot_of_interest,
 
   # weighted jaccard score
   ## simulate data
-  nr <- 2291; nc <- 265
-  set.seed(420)
-  input_m <- matrix(rnorm(nr * nc), nrow = nr, ncol = nc)
-  input_m[1:5, 1:5]
-  input_m[input_m<0.3] <-  0
-  
+  # nr <- 2291; nc <- 265
+  # set.seed(420)
+  # input_m <- matrix(rnorm(nr * nc), nrow = nr, ncol = nc)
+  # input_m[1:5, 1:5]
+  # input_m[input_m<0.3] <-  0
+  # 
   jaccardMinem <- function(input_m) {
     require(data.table)
     require(matrixStats)
@@ -206,10 +207,10 @@ partners = merge(plot_of_interest,
     colnames(rez2) <- colnames(input_m)
     rez2
   }
-  jacc_interactor_similarity = jaccardMinem(input_m)
-  jacc_interactor_similarity |> dim()
+  # jacc_interactor_similarity = jaccardMinem(input_m)
+  # jacc_interactor_similarity |> dim()
 
-  jacc_interactor_similarity |> pheatmap::pheatmap()
+  # jacc_interactor_similarity |> pheatmap::pheatmap()
   
   # matrix per protein across conditions
   signficant_one_conditions = DT_normalised[bicor>0.57]
@@ -371,4 +372,295 @@ partners = merge(plot_of_interest,
         geom_boxplot()+
         theme_bw()+
         facet_wrap('type')
+      
+      
+      
+# change function protein
+      # according to top interactors
+      # Uniprot mapping
+      Uniprot_annot = fread(here::here('in','datasets','uniprotkb_taxonomy_id_237561_2025_07_08.tsv.gz'))
+      Uniprot_annot[,CGD:=str_remove(CGD,';[:print:]*$')]
+      Uniprot_annot[,GeneID:=str_remove(GeneID,';[:print:]*$')]
+    universe_geneID = Uniprot_annot[GeneID != '',.(Entry,GeneID)]
+    
+    # finding the top 100 interactors per protein
+    DT_normalised_rev = copy(DT_normalised)
+    DT_normalised_rev[,`:=`(Protein_1 = Protein_2,
+                            Protein_2 = Protein_1)]
+    DT_normalised_rev = rbind(DT_normalised_rev,
+                              DT_normalised)
+    covariation_partners =DT_normalised_rev[order(-bicor)
+                      ][,.(Protein_1,Protein_2,bicor,Condition)
+                        ][!is.na(bicor),head(.SD,50), by = .(Protein_1, Condition)]
+    setkey(covariation_partners,'Protein_1')
+    
+    
+    calc_pairwise_overlaps <- function(sets) {
+      # Ensure that all sets are unique character vectors
+      sets_are_vectors <- vapply(sets, is.vector, logical(1))
+      if (any(!sets_are_vectors)) {
+        stop("Sets must be vectors")
+      }
+      sets_are_atomic <- vapply(sets, is.atomic, logical(1))
+      if (any(!sets_are_atomic)) {
+        stop("Sets must be atomic vectors, i.e. not lists")
+      }
+      sets <- lapply(sets, as.character)
+      is_unique <- function(x) length(unique(x)) == length(x)
+      sets_are_unique <- vapply(sets, is_unique, logical(1))
+      if (any(!sets_are_unique)) {
+        stop("Sets must be unique, i.e. no duplicated elements")
+      }
+      
+      n_sets <- length(sets)
+      set_names <- names(sets)
+      n_overlaps <- choose(n = n_sets, k = 2)
+      
+      vec_name1 <- character(length = n_overlaps)
+      vec_name2 <- character(length = n_overlaps)
+      vec_num_shared <- integer(length = n_overlaps)
+      vec_overlap <- numeric(length = n_overlaps)
+      vec_jaccard <- numeric(length = n_overlaps)
+      overlaps_index <- 1
+      
+      for (i in seq_len(n_sets - 1)) {
+        name1 <- set_names[i]
+        set1 <- sets[[i]]
+        for (j in seq(i + 1, n_sets)) {
+          name2 <- set_names[j]
+          set2 <- sets[[j]]
+          
+          set_intersect <- set1[match(set2, set1, 0L)]
+          set_union <- .Internal(unique(c(set1, set2), incomparables = FALSE,
+                                        fromLast = FALSE, nmax = NA))
+          num_shared <- length(set_intersect)
+          overlap <- num_shared / min(length(set1), length(set2))
+          jaccard <- num_shared / length(set_union)
+          
+          vec_name1[overlaps_index] <- name1
+          vec_name2[overlaps_index] <- name2
+          vec_num_shared[overlaps_index] <- num_shared
+          vec_overlap[overlaps_index] <- overlap
+          vec_jaccard[overlaps_index] <- jaccard
+          
+          overlaps_index <- overlaps_index + 1
+        }
+      }
+      
+      result <- data.frame(name1 = vec_name1,
+                           name2 = vec_name2,
+                           # n_members_1 = length_vec_1,
+                           # n_members_2 = length_vec_2,
+                           num_shared = vec_num_shared,
+                           overlap = vec_overlap,
+                           jaccard = vec_jaccard,
+                           stringsAsFactors = FALSE)
+      return(result)
+    }
+    top_partner_similarity= data.table()
+    for(i in unique(covariation_partners$Protein_1)){
+      print(i)
+     partners_tmp =  covariation_partners[Protein_1 ==i]
+     consensus = partners_tmp[,.N, by = Protein_2
+                              ][order(-N)][,head(.SD,50)
+                                           ][,Protein_2]
+     partners = split(partners_tmp$Protein_2,partners_tmp$Condition)
+     partners[['consensus']] <- consensus
+     
+     partners_overlap = calc_pairwise_overlaps(partners) |> 
+       as.data.table()
+     top_partner_similarity = rbind(top_partner_similarity,
+                                    partners_overlap[,Protein:=i])
+    }
+    statscond = covariation_partners[,.(Min_cor = min(bicor),
+                            avg_cor = mean(bicor)),by = .(Protein_1,Condition) ]
+    top_partner_similarity[,Condition:= fifelse(name1 =='consensus',name2,name1)] 
+    top_partner_similarity_stats =  merge(top_partner_similarity[name1 =='consensus' |
+                                                                   name2 == 'consensus'],
+                                          statscond,
+          by.x = c('Protein','Condition'),by.y = c('Protein_1','Condition'))
+         
+    
+    top_partner_similarity_stats |> 
+      ggplot(aes(x = overlap, y = avg_cor))+
+     geom_hex()+
+      theme_bw()+
+      facet_wrap('Condition')+
+      labs(x = 'interactor overlap per protein', y = 'mean interactor covariance')+
+      ggtitle('The agreement of top interactors between conditions - same function',
+              subtitle = 'agrees with the strength of covariation')
+      ggsave(here::here('out','plots','overlap_interator_top_conditions.pdf'))
+    
+      Protein_OI = 'A0A1D8PKD5'
+      Protein_OI_dt = DT_normalised[Protein_1 == Protein_OI|
+                             Protein_2 == Protein_OI][order(-bicor)] 
+    Protein_OI_dt[,Partner:= fifelse(Protein_1 == Protein_OI,Protein_2,Protein_1)]
+    SC_edta_interactors = universe_geneID[Entry %in%  
+                                            Protein_OI_dt[Condition=='SC_edta'
+                                                          ][,head(.SD,50)][,Partner],
+                                          GeneID]
+    universe_edta = universe_geneID[Entry %in%  
+                                      Protein_OI_dt[Condition=='SC_edta'
+                                      ][,Partner],
+                                    GeneID]
+    SM_lys_interactors = universe_geneID[Entry %in%  
+                                            Protein_OI_dt[Condition=='SM_lys'
+                                            ][,head(.SD,50)][,Partner],
+                                          GeneID]
+    
+    universe_SM_lys = universe_geneID[Entry %in%  
+                                        Protein_OI_dt[Condition=='SM_lys'
+                                        ][,Partner],
+                                      GeneID]
+        ggplot(Protein_OI_dt,aes(x = avg_cor, y = bicor))+
+        geom_hex()+
+        facet_wrap('Condition')+
+        theme_bw()+
+          geom_abline(slope = 1, intercept = 0)+
+        labs(x = 'Avg cov interactor across conditions',
+             y = 'partner covariation in specific condition')
+      ggsave(here::here('out','plots',glue::glue('{Protein_OI}_overlap_interator_top_conditions.pdf')))
+      
+      ego_edta <- enrichGO(gene          =SC_edta_interactors,
+                      universe      = universe_edta,  
+                      OrgDb         = org.Calbicans.eg.db,
+                      ont           = "ALL",
+                      pAdjustMethod = "BH",
+                      pvalueCutoff  = 0.01,
+                      qvalueCutoff  = 0.05,
+                      # keyType = 'UNIPROT',
+                      readable      = TRUE)
+      ego_SM_lys <- enrichGO(gene          =SM_lys_interactors,
+                           universe      = universe_SM_lys,  
+                           OrgDb         = org.Calbicans.eg.db,
+                           ont           = "ALL",
+                           pAdjustMethod = "BH",
+                           pvalueCutoff  = 0.01,
+                           qvalueCutoff  = 0.05,
+                           # keyType = 'UNIPROT',
+                           readable      = TRUE)
+      dotplot(ego_edta)+
+        ggtitle(glue::glue('{Protein_OI}_SC_edta_top50 enrichment'))
+      ggsave(here::here('out','plots',glue::glue('{Protein_OI}_SC_edta_top50 enrichment.pdf')))
+      
+      dotplot(ego_SM_lys)+
+        ggtitle(glue::glue('{Protein_OI}_SM_lys_top50 enrichment'))
+      ggsave(here::here('out','plots',glue::glue('{Protein_OI}_SM_lys_top50 enrichment.pdf')))
+      
+      covariation_partners = merge(DT_normalised,
+                                universe_geneID[,.(Entry,GeneID)],
+                                   by.x = 'Protein_1',
+                                   by.y = 'Entry') |> 
+        merge(universe_geneID[,.(Entry,GeneID)],
+              by.x = 'Protein_2',
+              by.y = 'Entry') 
+      covariation_partners = covariation_partners[GeneID.x != ''
+      ][GeneID.y != ''   ]
+      enrichment_function <- function(Uniprot,Condition,Universe,covariations){
+        i  = universe_geneID[Entry == Uniprot,GeneID]
+        interactors = covariations[GeneID.x == i|
+                                             GeneID.y == i 
+        ][,Interactor:= fifelse(GeneID.x==i,GeneID.y,GeneID.x) ][,Interactor]
+        if(length(interactors)>2){
+          ego <- enrichGO(gene          =interactors ,
+                          universe      = universe_geneID$GeneID,  
+                          OrgDb         = org.Calbicans.eg.db,
+                          ont           = "ALL",
+                          pAdjustMethod = "BH",
+                          pvalueCutoff  = 0.01,
+                          qvalueCutoff  = 0.05,
+                          # keyType = 'UNIPROT',
+                          readable      = TRUE)
+          if(!(is.null(ego)) ){
+            term_OI = ego@result |> 
+              subset(p.adjust<0.05) |> 
+              dplyr::arrange(-Count) |> as.data.table()
+            if(nrow(term_OI)>1){
+              term_OI[,Protein:=Uniprot]
+              term_OI[,Condition:=Condition]
+              fwrite(term_OI, here::here('out','datasets',glue::glue('enrichment_terms_bicor_conditionss.csv')), append = T)
+              
+            }
+            
+          }
+        }
+      }
+      
+      plan(sequential)
+      plan(multisession, workers = 40)
+      
+      for(i in unique(covariation_partners$Condition)){
+        print(i)
+      furrr::future_walk(.x = universe_geneID$Entry, ~enrichment_function(Uniprot = .x,
+                                                                          Condition = i,
+                                                                          Universe = universe_geneID,
+                                                                          covariations =covariation_partners[Condition ==i] ))
+      }  
+      
+      
+      # change function protein
+      # according to signficant interactors
+      # Uniprot mapping
+      Uniprot_annot = fread(here::here('in','datasets','uniprotkb_taxonomy_id_237561_2025_07_08.tsv.gz'))
+      Uniprot_annot[,CGD:=str_remove(CGD,';[:print:]*$')]
+      Uniprot_annot[,GeneID:=str_remove(GeneID,';[:print:]*$')]
+      covar_quantiles = DT_normalised[!is.na(bicor),bicor] |> quantile(probs = seq(0, 1, 0.001), type = 5)
+      
+      covariation_partners <- DT_normalised[bicor>=covar_quantiles["99.0%"],.(Protein_1,Protein_2,bicor,Condition)]
+      universe = unique(c(covariation_partners$Protein_1,covariation_partners$Protein_2))
+      # number of proteins with at least 1 covariation Partner
+      universe |> length()
+      # universe are all proteins with at least 1 covariation partner
+      universe_geneID = Uniprot_annot[Entry %in%universe ,.(Entry,GeneID)]
+      Uniprot_annot =Uniprot_annot[GeneID != '']
+      
+      covariation_partners = merge(covariation_partners,
+                                   Uniprot_annot[,.(Entry,GeneID)],
+                                   by.x = 'Protein_1',
+                                   by.y = 'Entry') |> 
+        merge(Uniprot_annot[,.(Entry,GeneID)],
+              by.x = 'Protein_2',
+              by.y = 'Entry') 
+      covariation_partners = covariation_partners[GeneID.x != ''
+      ][GeneID.y != ''   ]
+      enrichment_function <- function(Uniprot,Condition,Universe,covariations){
+        i  = universe_geneID[Entry == Uniprot,GeneID]
+        interactors = covariations[GeneID.x == i|
+                                     GeneID.y == i 
+        ][,Interactor:= fifelse(GeneID.x==i,GeneID.y,GeneID.x) ][,Interactor]
+        if(length(interactors)>2){
+          ego <- enrichGO(gene          =interactors ,
+                          universe      = universe_geneID$GeneID,  
+                          OrgDb         = org.Calbicans.eg.db,
+                          ont           = "ALL",
+                          pAdjustMethod = "BH",
+                          pvalueCutoff  = 0.01,
+                          qvalueCutoff  = 0.05,
+                          # keyType = 'UNIPROT',
+                          readable      = TRUE)
+          if(!(is.null(ego)) ){
+            term_OI = ego@result |> 
+              subset(p.adjust<0.05) |> 
+              dplyr::arrange(-Count) |> as.data.table()
+            if(nrow(term_OI)>1){
+              term_OI[,Protein:=Uniprot]
+              term_OI[,Condition:=Condition]
+              fwrite(term_OI, here::here('out','datasets',glue::glue('enrichment_terms_bicor_conditionss.csv')), append = T)
+              
+            }
+            
+          }
+        }
+      }
+      
+      plan(sequential)
+      plan(multisession, workers = 40)
+      
+      for(i in unique(covariation_partners$Condition)){
+        print(i)
+        furrr::future_walk(.x = universe_geneID$Entry, ~enrichment_function(Uniprot = .x,
+                                                                            Condition = i,
+                                                                            Universe = universe_geneID,
+                                                                            covariations =covariation_partners[Condition ==i] ))
+      }  
       
